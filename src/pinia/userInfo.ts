@@ -14,7 +14,8 @@ export const useUserInfo = defineStore("userInfo", {
         localAudio: true, // 本地声音
         remoteAudio: true, // 对方声音
         localVideo: true, // 本地视频
-        remoteVideo: true // 对方视频
+        remoteVideo: true, // 对方视频
+        videoInputDeviceId: undefined // 视频源ID
       },
       // 当前用户信息
       userInfo: {

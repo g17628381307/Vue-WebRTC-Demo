@@ -1,42 +1,44 @@
 <template>
-  <div class="context">
-    <UserList @callUser="onCallUser" :callState="callState" />
-    <div class="right show-box">
-      <div class="close">
-        <span class="toast">{{ toast }}</span>
-        <Transition name="close">
-          <SvgIcon
-            name="close"
-            size="48"
-            color="#fe6c6f"
-            @click="onOffCall"
-            v-if="callState === CALL_STATE.CONNECT || callState === CALL_STATE.SEND"
-          />
-        </Transition>
-      </div>
-      <!-- 本地视频 -->
-      <AppVideo
-        @click="
+  <div>
+    <div class="context">
+      <UserList @callUser="onCallUser" :callState="callState" />
+      <div class="right show-box">
+        <div class="close">
+          <span class="toast">{{ toast }}</span>
+          <Transition name="close">
+            <SvgIcon
+              name="close"
+              size="48"
+              color="#fe6c6f"
+              @click="onOffCall"
+              v-if="callState === CALL_STATE.CONNECT || callState === CALL_STATE.SEND"
+            />
+          </Transition>
+        </div>
+        <!-- 本地视频 -->
+        <AppVideo
+          @click="
           (callState === CALL_STATE.CONNECT && (videoDirection = !videoDirection)) ||
             (!videoDirection && (videoDirection = !videoDirection))
         "
-        :class="[videoDirection ? 'local-video' : 'remote-video']"
-        ref="localVideoRef"
-      />
-      <!-- remote视频 -->
-      <AppVideo
-        @click="videoDirection = !videoDirection"
-        :class="[!videoDirection ? 'local-video' : 'remote-video', callState === CALL_STATE.CONNECT ? '' : 'hidden-remote']"
-        ref="remoteVideoRef"
-      />
+          :class="[videoDirection ? 'local-video' : 'remote-video']"
+          ref="localVideoRef"
+        />
+        <!-- remote视频 -->
+        <AppVideo
+          @click="videoDirection = !videoDirection"
+          :class="[!videoDirection ? 'local-video' : 'remote-video', callState === CALL_STATE.CONNECT ? '' : 'hidden-remote']"
+          ref="remoteVideoRef"
+        />
+      </div>
     </div>
+    <!-- 通知窗口 -->
+    <Notice ref="noticeRef" @call="onCall" />
+    <!-- 登录窗口 -->
+    <Login @login="onLogin" ref="loginRef" />
+    <!-- 设置窗口 -->
+    <Settings />
   </div>
-  <!-- 通知窗口 -->
-  <Notice ref="noticeRef" @call="onCall" />
-  <!-- 登录窗口 -->
-  <Login @login="onLogin" ref="loginRef" />
-  <!-- 设置窗口 -->
-  <Settings />
 </template>
 <script setup lang="ts">
 import { ref, watch } from "vue";
@@ -45,7 +47,13 @@ import SvgIcon from "./components/SvgIcon.vue";
 import AppVideo from "./components/AppVideo.vue";
 import Login from "./components/Login.vue";
 import SocketControl from "./socket";
-import { DIALOG_TYPE, SOCKET_ON_RTC, CALL_TYPE, CALL_STATE, SETTINGS_VIDEO } from "./enum";
+import {
+  DIALOG_TYPE,
+  SOCKET_ON_RTC,
+  CALL_TYPE,
+  CALL_STATE,
+  SETTINGS_VIDEO
+} from "./enum";
 import { showDiaLog } from "./utils";
 import { useUserInfo } from "./pinia/userInfo";
 import { useToast } from "@/hooks/useToast";
@@ -90,6 +98,7 @@ watch(
   () => userInfo.settings,
   () => {
     let settings = userInfo.settings;
+    console.log(settings.videoInputDeviceId, "settings");
     if (localVideoRef.value) {
       const localVideo: HTMLVideoElement = localVideoRef.value.$el;
       // 关闭本地声音
@@ -119,6 +128,20 @@ watch(
     }
   }
 );
+
+// 监听切换视频输入源
+watch(
+  () => userInfo.settings.videoInputDeviceId,
+  () => {
+    if (localVideoRef.value && userInfo.userInfo.username) {
+      const localVideo: HTMLVideoElement = localVideoRef.value.$el;
+      // 如果处于通话挂断电话，否则直接切换
+      if (callState.value === CALL_STATE.CONNECT) onOffCall();
+      initVideo(localVideo);
+    }
+  }
+);
+
 function onLogin(username: string) {
   // 刚进入刷新remote，准备连接对方的pc
   remotePc = new RTCPeerConnection(rtcConfig);
@@ -139,7 +162,10 @@ async function onCall(is: boolean) {
   }
   // 如果当前状态处于通话，先断开通话
   if (callState.value === CALL_STATE.CONNECT) {
-    showDiaLog({ type: DIALOG_TYPE.WARNING, msg: "当前处于通话中,请先挂断后重试!" });
+    showDiaLog({
+      type: DIALOG_TYPE.WARNING,
+      msg: "当前处于通话中,请先挂断后重试!"
+    });
     sc.emit(SOCKET_ON_RTC.USER_REFUST, {});
     return;
   }
@@ -166,13 +192,21 @@ async function initVideo(video: HTMLVideoElement) {
   let settings = userInfo.settings;
   try {
     let config = {
-      video: settings.localVideo || false,
-      audio: settings.localAudio || false
+      video: {
+        deviceId: settings.videoInputDeviceId
+          ? { exact: settings.videoInputDeviceId }
+          : undefined
+      },
+      audio: settings.localAudio || {
+        deviceId: settings.videoInputDeviceId ?? undefined
+      }
     };
     // userMediaConfig ,getDisplayMedia共享屏幕
-    let stream = await navigator.mediaDevices[settings.video === SETTINGS_VIDEO.DISPLAY ? "getDisplayMedia" : "getUserMedia"](
-      config
-    );
+    let stream = await navigator.mediaDevices[
+      settings.video === SETTINGS_VIDEO.DISPLAY
+        ? "getDisplayMedia"
+        : "getUserMedia"
+    ](config);
     video.srcObject = stream;
     localStream = stream;
     video.play();
@@ -230,9 +264,11 @@ async function start(username: string) {
     userInfo.userInfo.toUserName = res.toUsername;
     let video: HTMLVideoElement = remoteVideoRef.value.$el;
     remotePc.ontrack = e => {
+      console.log(e.streams, "remote");
       video.srcObject = e.streams[0];
       // 如果是发起者需要对方同意，如果是接收者直接播放
-      if (noticeRef.value && res.callType === CALL_TYPE.SENDER) noticeRef.value.showNotice(res.toUsername);
+      if (noticeRef.value && res.callType === CALL_TYPE.SENDER)
+        noticeRef.value.showNotice(res.toUsername);
       else {
         video.oncanplay = () => {
           video.play();
@@ -262,10 +298,11 @@ async function sendOffer(toUser: string, callType: CALL_TYPE) {
     localPc.addTrack(track, localStream);
   });
   // 给当前RTC流设置监听事件(协议完成回调)
-  localPc.onicecandidate = function (event) {
+  localPc.onicecandidate = function(event) {
     console.log("localPc:", event.candidate, event);
     // 回调时，将自己candidate发给对方，对方可以直接addIceCandidate(candidate)添加可以获取流
-    if (event.candidate) sc.emit(SOCKET_ON_RTC.CANDIDATE, event.candidate, callType);
+    if (event.candidate)
+      sc.emit(SOCKET_ON_RTC.CANDIDATE, event.candidate, callType);
   };
   // 记录给谁打电话
   userInfo.userInfo.toUserName = toUser;
